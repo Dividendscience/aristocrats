@@ -1,0 +1,286 @@
+---
+title: "SP_500_A_vs_Non_A"
+date: "4/12/2020"
+output: html_document
+---
+
+```{R}
+library(tidyverse)
+library(tidyquant)
+library(riingo)
+
+sp_500_ticker <- tq_index("SP500") %>% arrange(symbol) %>% pull(symbol)
+
+```
+
+Since Berkshire Hathaway Inc. is recorded as "BRK.B" in the function of "tq_index", whereas Tiingo recorded as "BRK-B". We need to make some changes in order to make sure the R code to correctly pull data from Riingo. 
+
+```{R eval = FALSE, echo = FALSE}
+sp_500_ticker<-replace(sp_500_ticker, sp_500_ticker=="BF.B", "BF-B")
+sp_500_ticker<-replace(sp_500_ticker, sp_500_ticker=="BRK.B", "BRK-B")
+
+sp_500_ticker_final<-sp_500_ticker
+```
+
+Since we have got the tickers, we can try to get the data from Yahoo Finance. __Note that__, you need to make sure all the tickers are alphabetically sorted, as these free services may have hourly-limitations. If that is true, an alphabetically sorted list can help you know the pick-up point. 
+
+```{R eval = FALSE, echo = FALSE}
+sp_500_2019_2020_Yahoo <- 
+  sp_500_ticker_final %>% 
+  tq_get(get  = "stock.prices", from = "2015-01-01", to = "2020-04-16") %>% 
+  arrange(symbol) 
+```
+
+```{R eval = FALSE, echo = FALSE }
+saveRDS(sp_500_2019_2020_Yahoo, file="sp_500_2019_2020_Yahoo.rds")
+```
+
+```{R}
+sp_500_2015_2020_Yahoo_working<-readRDS("sp_500_2019_2020_Yahoo.rds")
+```
+
+```{R}
+check_1<-sp_500_2015_2020_Yahoo_working[is.na(sp_500_2015_2020_Yahoo_working$adjusted),]
+check_1
+table(check_1$symbol)
+```
+Since we run into problem with "HWM","TT", and "UA", as it seems that there are some NA data from Yahoo finance. We might need to find some data from Riingo.
+
+In addition, we want to check whether there are missing dates for some tickers.
+
+```{R}
+length(unique(as.Date(sp_500_2015_2020_Yahoo_working$date)))
+```
+
+There are 1330 unique dates. Thus, for tickers that have less than 1330 observations, we should correct them or remove them.
+
+
+```{R}
+less_than1330<-sp_500_2015_2020_Yahoo_working %>% group_by(symbol) %>% filter (length(unique(as.Date(date)))<1330)
+
+table(less_than1330$symbol)
+```
+
+
+combining with NA ones, I created a additional list to get the data from Diingo.I excluded CARR, CTVA, DOW,FTV, HPE, IR, LW, OTIS, and WRK, given that their earlist starting time point is after 2015-01-01.
+
+```{R}
+additional_list_tickers<-c("FOX","FOXA","KHC","PYPL","HWM","TT","UA")
+```
+
+```{R eval = FALSE, echo = FALSE}
+sp_500_2015_2020_Riingo<- 
+  additional_list_tickers%>% 
+  riingo_prices(start_date = "2015-01-01", end_date = "2020-4-15") %>% 
+  arrange(ticker) %>% 
+  mutate(date = ymd(date))
+
+saveRDS(sp_500_2015_2020_Riingo, file="sp_500_2015_2020_Riingo.rds")
+```
+
+
+
+```{R}
+sp_500_2015_2020_Riingo<-readRDS("sp_500_2015_2020_Riingo.rds")
+counts_2<-table(sp_500_2015_2020_Riingo$ticker)
+counts_2
+```
+
+Thus, in the end, I will only copy "HWM" and "TT" to combine with data from Yahoo, since "FOX","FOXA","KHC","PYPL", and "UA" are also imcomplete in Tiingo.
+
+```{R}
+target <- c("TT","HWM")
+sp_500_2015_2020_Riingo_TT_HWM<-sp_500_2015_2020_Riingo %>% select("ticker","date","open","high","low","close","volume","adjClose") %>% filter(ticker %in% target)
+
+colnames(sp_500_2015_2020_Riingo_TT_HWM)<-c("symbol","date","open","high","low","close","volume","adjusted")
+
+head(sp_500_2015_2020_Riingo_TT_HWM)
+```
+
+Remove all the imcomplete tickers from the Yahoo data. 
+
+```{R}
+
+target_2<-c("CARR","CTVA","DOW","FOX","FOXA", "FTV","HPE","HWM",  "IR", "KHC",  "LW", "OTIS","PYPL","UA","WRK","TT")
+
+sp_500_2015_2020_Yahoo_working_deleted_updated<-sp_500_2015_2020_Yahoo_working %>% filter(!symbol %in% target_2)
+
+```
+
+Combine the data from Yahoo and Riingo.
+
+```{R}
+sp_500_2015_2020_final<-rbind(sp_500_2015_2020_Yahoo_working_deleted_updated,sp_500_2015_2020_Riingo_TT_HWM)
+
+sp_500_2015_2020_final<-sp_500_2015_2020_final %>% arrange(symbol)
+```
+
+Next, we want to separate all the stocks into Aristocrats versus non-Aristocrats.
+
+```{R}
+data<-read.csv("Dividend_Aristocrats.csv")
+
+DA_tickers<-data %>% pull(Ticker)
+DA_tickers<-as.character(DA_tickers)
+
+DA_tickers<-replace(DA_tickers, DA_tickers=="BF.B", "BF-B")
+```
+
+
+```{R}
+sp_500_2015_2020_final_Aristocrats_OR_NOT<-sp_500_2015_2020_final %>% mutate(aristocrat = ifelse((sp_500_2015_2020_final$symbol %in% DA_tickers),1,0)) 
+
+
+sp_500_2015_2020_final_Aristocrats_OR_NOT[,c("symbol","aristocrat")]
+```
+
+
+```{R}
+sp_500_aggregate<-aggregate(sp_500_2015_2020_final_Aristocrats_OR_NOT[, "adjusted"],by= list(sp_500_2015_2020_final_Aristocrats_OR_NOT$date,sp_500_2015_2020_final_Aristocrats_OR_NOT$aristocrat), mean) 
+
+```
+
+
+```{R}
+colnames(sp_500_aggregate)<-c("date","aristocrat","adjusted")
+
+```
+
+
+we can then plot the data using ggplot
+
+```{R}
+sp_500_aggregate%>% 
+  ggplot(aes(x = date, y = adjusted,group=aristocrat, color = as.factor(aristocrat)))  +geom_line()+
+  scale_x_date(breaks = scales::pretty_breaks(n = 5)) +
+  labs(x = "", y = "Adjusted Price") +theme_classic()
+```
+
+
+```{R}
+
+sp_500_aggregate%>% 
+  ggplot(aes(x = date, y = adjusted,group=aristocrat, color=as.factor(aristocrat))) + 
+  geom_line()+
+  scale_x_date(limit=c(as.Date("2020-01-01"),as.Date("2020-04-15")))+
+  labs(x = "Year of 2020", y = "Adjusted Price") +theme_classic()
+```
+
+```{R}
+# The list is from https://www.dividend.com/investor-resources/sp-500-companies-that-dont-pay-dividends/
+
+Non_Dividend<-read.csv("non_dividends.csv")
+
+Non_Dividend_tickers<-Non_Dividend %>% pull(ï..Ticker)
+Non_Dividend_tickers<-as.character(Non_Dividend_tickers)
+
+Non_Dividend_tickers<-replace(Non_Dividend_tickers, Non_Dividend_tickers=="BF.B", "BF-B")
+
+```
+
+
+```{R}
+sp_500_2015_2020_final_Aristocrats_OR_NOT_dividend_ornot<-sp_500_2015_2020_final_Aristocrats_OR_NOT %>% mutate(Dividends = ifelse((sp_500_2015_2020_final_Aristocrats_OR_NOT$symbol %in% Non_Dividend_tickers),0,1)) 
+```
+
+
+```{R}
+sp_500_2015_2020_final_Aristocrats_OR_NOT_dividend_ornot_3_groups<-sp_500_2015_2020_final_Aristocrats_OR_NOT_dividend_ornot%>% mutate(threegroups = ifelse(Dividends==0,0,(ifelse(aristocrat==1,2,1)))) 
+
+```
+
+
+```{R}
+sp_500_aggregate_3<-aggregate(sp_500_2015_2020_final_Aristocrats_OR_NOT_dividend_ornot_3_groups[, "adjusted"],by= list(sp_500_2015_2020_final_Aristocrats_OR_NOT_dividend_ornot_3_groups$date,sp_500_2015_2020_final_Aristocrats_OR_NOT_dividend_ornot_3_groups$threegroups), mean) 
+```
+
+```{R}
+
+colnames(sp_500_aggregate_3)<-c("date","threegroups","adjusted")
+
+sp_500_aggregate_3%>% 
+  ggplot(aes(x = date, y = adjusted,group=as.factor(threegroups), color=as.factor(threegroups))) + 
+  geom_line()+
+  scale_x_date(breaks = scales::pretty_breaks(n = 5))+
+  labs(x = "", y = "Adjusted Price") +theme_classic()
+```
+
+```{R}
+sp_500_aggregate_3%>% 
+ ggplot(aes(x = date, y = adjusted,group=as.factor(threegroups), color=as.factor(threegroups))) + 
+  geom_line()+
+  scale_x_date(limit=c(as.Date("2020-01-01"),as.Date("2020-04-15")))+
+  labs(x = "Year of 2020", y = "Adjusted Price") +theme_classic()
+```
+
+
+```{R}
+sp_500_aggregate$base_2015<-ifelse(sp_500_aggregate$aristocrat==0,75.21828,74.84421)
+
+sp_500_aggregate<-sp_500_aggregate %>%  mutate(percentage_2015=(adjusted-base_2015)/base_2015)
+
+```
+
+
+```{R}
+sp_500_aggregate%>% 
+  ggplot(aes(x = date, y = percentage_2015,group=aristocrat, color = as.factor(aristocrat)))  +geom_line()+
+  scale_y_continuous(labels = scales::percent, breaks = scales::pretty_breaks(n = 10))+
+  scale_x_date(breaks = scales::pretty_breaks(n = 5)) +
+  labs(x = "", y = "Return") +theme_classic()
+```
+
+
+
+```{R}
+sp_500_aggregate_3 %>% group_by(threegroups) %>%slice(1)
+
+sp_500_aggregate_3$base_2015<-ifelse(sp_500_aggregate_3$threegroups==0,122.66204,ifelse(sp_500_aggregate_3$threegroups==1,66.80719,74.84421))
+
+sp_500_aggregate_3<-sp_500_aggregate_3 %>%  mutate(percentage_2015=(adjusted-base_2015)/base_2015)
+```
+
+```{R}
+sp_500_aggregate_3%>% 
+  ggplot(aes(x = date, y = percentage_2015,group=as.factor(threegroups), color=as.factor(threegroups))) + 
+  geom_line()+
+  scale_y_continuous(labels = scales::percent, breaks = scales::pretty_breaks(n = 10))+
+  scale_x_date(breaks = scales::pretty_breaks(n = 6))+
+scale_colour_discrete(name="SP500 Stock Categories",
+                         breaks=c("0", "1", "2"),
+                         labels=c("No Dividends", "Dividend Non-Aristocrats", "Dividend Aristocrats"))+theme_classic()+ labs(x = "", y = "Return")+ggtitle("SP500 Return Based on Adjusted Close Price (from Jan. 2015)")+theme(legend.position = c(0.2, 0.7))
+```
+
+```{R}
+sp_500_aggregate_3%>% 
+  ggplot(aes(x = date, y = percentage_2015,group=as.factor(threegroups), color=as.factor(threegroups))) + 
+  geom_line()+
+  scale_y_continuous(labels = scales::percent, breaks = scales::pretty_breaks(n = 10))+
+  scale_x_date(limit=c(as.Date("2020-01-01"),as.Date("2020-04-15")),breaks = scales::pretty_breaks(n = 10))+scale_colour_discrete(name="SP500 Stock Categories",
+                         breaks=c("0", "1", "2"),
+                         labels=c("No Dividends", "Dividend Non-Aristocrats", "Dividend Aristocrats"))+theme_classic()+ labs(x = "Year of 2020", y = "Return")+ggtitle("SP500 Return Based on Adjusted Close Price (from Jan. 2015)")+theme(legend.position = c(0.2, 0.2))
+```
+
+
+```{R}
+sp_500_aggregate_3_2020<-sp_500_aggregate_3 %>% filter(date > "2019-12-31")
+
+sp_500_aggregate_3_2020 %>% group_by(threegroups)%>% slice(1)
+
+sp_500_aggregate_3_2020$base_2020<-ifelse(sp_500_aggregate_3_2020$threegroups==0,258.2466,ifelse(sp_500_aggregate_3_2020$threegroups==1,124.0812,131.4314))
+
+sp_500_aggregate_3_2020<-sp_500_aggregate_3_2020 %>%  mutate(percentage_2020=(adjusted-base_2020)/base_2020)
+
+```
+
+
+```{R}
+sp_500_aggregate_3_2020%>% 
+  ggplot(aes(x = date, y = percentage_2020,group=as.factor(threegroups), color=as.factor(threegroups))) + 
+  geom_line()+
+  scale_y_continuous(labels = scales::percent, breaks = scales::pretty_breaks(n = 10))+
+  scale_x_date(breaks = scales::pretty_breaks(n = 10))+
+  scale_colour_discrete(name="SP500 Stock Categories",
+                         breaks=c("0", "1", "2"),
+                         labels=c("No Dividends", "Dividend Non-Aristocrats", "Dividend Aristocrats"))+theme_classic()+ labs(x = "Year of 2020", y = "Return")+ggtitle("SP500 Return Based on Adjusted Close Price (from Jan. 2020)")+theme(legend.position = c(0.2, 0.2))
+```
